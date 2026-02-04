@@ -59,7 +59,8 @@ Odpovez POUZE validnim JSON.` }]
         }
       }
     } else {
-      let dbQuery = supabase.from('orders').select(queryConfig.select || '*')
+      // Fix: Added explicit type annotation to break infinite type chain
+      let dbQuery: any = supabase.from('orders').select(queryConfig.select || '*')
       if (queryConfig.filters) {
         for (const f of queryConfig.filters) {
           if (f.operator === 'eq') dbQuery = dbQuery.eq(f.column, f.value)
