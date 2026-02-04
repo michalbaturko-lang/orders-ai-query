@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export async function GET() {
   try {
     const { count: ordersCount, error: ordersError } = await supabase
@@ -19,12 +22,24 @@ export async function GET() {
     return NextResponse.json({
       totalRecords: ordersCount || 0,
       files: files || []
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     })
   } catch (error) {
     console.error('Count API error:', error)
-    return NextResponse.json(
-      { error: 'Failed to get data count' },
-      { status: 500 }
-    )
+    return NextResponse.json({ 
+      totalRecords: 0, 
+      files: [],
+      error: 'Failed to fetch data' 
+    }, { 
+      status: 500,
+      headers: {
+        'Cache-Control': 'no-store'
+      }
+    })
   }
 }
