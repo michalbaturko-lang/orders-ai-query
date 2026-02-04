@@ -70,21 +70,38 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
-    if (!files || files.length === 0) return NextResponse.json({ success: false, error: 'No files uploaded' }, { status: 400 })
+
+    if (!files || files.length === 0)
+      return NextResponse.json({ success: false, error: 'No files uploaded' }, { status: 400 })
 
     let totalRecords = 0
     const errors: string[] = []
+    const uploadedFiles: Array<{ filename: string; records: number }> = []
 
     for (const file of files) {
       try {
         const country = detectCountryFromFilename(file.name)
         const buffer = await file.arrayBuffer()
         const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
+        
+        let fileRecords = 0
+        let allColumns: string[] = []
+        let sampleData: Record<string, any>[] = []
 
         for (const sheetName of workbook.SheetNames) {
           const sheet = workbook.Sheets[sheetName]
           const jsonData = XLSX.utils.sheet_to_json(sheet, { defval: '' })
           if (jsonData.length === 0) continue
+
+          // Collect columns from first row
+          if (jsonData.length > 0 && allColumns.length === 0) {
+            allColumns = Object.keys(jsonData[0] as Record<string, any>)
+          }
+
+          // Collect sample data (first 5 rows)
+          if (sampleData.length < 5) {
+            sampleData = jsonData.slice(0, 5) as Record<string, any>[]
+          }
 
           const orders = jsonData.map(row => mapRowToOrder(row as Record<string, any>, country))
           const batchSize = 500
@@ -94,9 +111,27 @@ export async function POST(request: NextRequest) {
             if (error) {
               console.error('Supabase insert error:', error)
               errors.push(`Error inserting batch from ${file.name}: ${error.message}`)
-            } else totalRecords += batch.length
+            } else {
+              totalRecords += batch.length
+              fileRecords += batch.length
+            }
           }
         }
+
+        // Save file metadata to uploaded_files table
+        const { error: fileError } = await supabase.from('uploaded_files').insert({
+          filename: file.name,
+          records_count: fileRecords,
+          columns: allColumns,
+          sample_data: sampleData
+        })
+
+        if (fileError) {
+          console.error('Error saving file metadata:', fileError)
+          errors.push(`Error saving metadata for ${file.name}: ${fileError.message}`)
+        }
+
+        uploadedFiles.push({ filename: file.name, records: fileRecords })
       } catch (err: any) {
         console.error('File processing error:', err)
         errors.push(`Error processing ${file.name}: ${err.message}`)
@@ -104,7 +139,14 @@ export async function POST(request: NextRequest) {
     }
 
     const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true })
-    return NextResponse.json({ success: true, totalRecords: count || totalRecords, filesProcessed: files.length, errors: errors.length > 0 ? errors : undefined })
+
+    return NextResponse.json({
+      success: true,
+      totalRecords: count || totalRecords,
+      filesProcessed: files.length,
+      uploadedFiles,
+      errors: errors.length > 0 ? errors : undefined
+    })
   } catch (error: any) {
     console.error('Upload error:', error)
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
