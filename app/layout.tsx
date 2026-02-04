@@ -1,8 +1,8 @@
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'Orders AI Query',
-  description: 'Dotazujte se na objednávky pomocí AI',
+  title: 'RM Database Tool',
+  description: 'Nahrávejte data a ptejte se pomocí AI',
 }
 
 export default function RootLayout({
