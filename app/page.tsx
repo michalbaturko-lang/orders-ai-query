@@ -20,6 +20,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const [selectedFileId, setSelectedFileId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -98,7 +99,7 @@ export default function Home() {
       const res = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: input })
+        body: JSON.stringify({ query: input, fileId: selectedFileId })
       })
       const data = await res.json()
       setMessages(prev => [...prev, {
@@ -111,18 +112,52 @@ export default function Home() {
     setQueryLoading(false)
   }
 
+  const handleExportExcel = async () => {
+    try {
+      const fileParam = selectedFileId ? `?fileId=${selectedFileId}` : ''
+      const res = await fetch(`/api/export${fileParam}`)
+      if (!res.ok) throw new Error('Export failed')
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `export-${new Date().toISOString().split('T')[0]}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Chyba při exportu do Excelu' }])
+    }
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
       <div style={{ maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
         <div style={{ background: '#1a1a2e', borderRadius: '12px', padding: '20px', marginBottom: '20px', color: 'white' }}>
-          <h1 style={{ margin: 0, fontSize: '24px' }}>Orders AI Query</h1>
+          <h1 style={{ margin: 0, fontSize: '24px' }}>RM Database Tool</h1>
           <p style={{ margin: '5px 0 0', opacity: 0.7 }}>Nahrávejte CSV/Excel soubory a ptejte se v češtině</p>
         </div>
 
         {dataLoaded && (
-          <div style={{ background: '#d4edda', color: '#155724', padding: '12px 20px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ background: '#d4edda', color: '#155724', padding: '12px 20px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
             <span>✓ Načteno {recordCount.toLocaleString('cs-CZ')} záznamů</span>
-            <button onClick={handleClearData} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>🗑️ Smazat data</button>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              {uploadedFiles.length > 1 && (
+                <select
+                  value={selectedFileId ?? ''}
+                  onChange={(e) => setSelectedFileId(e.target.value ? Number(e.target.value) : null)}
+                  style={{ padding: '6px 10px', borderRadius: '4px', border: '1px solid #28a745', fontSize: '12px', background: 'white' }}
+                >
+                  <option value="">Všechny soubory</option>
+                  {uploadedFiles.map(f => (
+                    <option key={f.id} value={f.id}>{f.filename}</option>
+                  ))}
+                </select>
+              )}
+              <button onClick={handleExportExcel} style={{ background: '#17a2b8', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Export Excel</button>
+              <button onClick={handleClearData} style={{ background: '#dc3545', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>🗑️ Smazat data</button>
+            </div>
           </div>
         )}
 
