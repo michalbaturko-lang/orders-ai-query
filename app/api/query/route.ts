@@ -1,39 +1,93 @@
 import { NextRequest, NextResponse } from 'next/server'
+import Anthropic from '@anthropic-ai/sdk'
+import { supabase } from '@/lib/supabase'
 
-declare global { var ordersData: any[] | undefined }
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+async function getSchemaInfo(): Promise<string> {
+  const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true })
+  const { data: sample } = await supabase.from('orders').select('*').limit(3)
+  return `Databaze obsahuje tabulku "orders" s ${count || 0} zaznamy.
+Sloupce: id, country, code, order_date, status, currency, email, phone, bill_full_name, bill_company, bill_street, bill_city, bill_zip, bill_country, vat_id, delivery_full_name, delivery_street, delivery_city, delivery_zip, delivery_country, total_price, shipping_price, payment_method, shipping_method, notes, raw_data, created_at
+Priklady dat: ${sample ? JSON.stringify(sample.slice(0, 2), null, 2) : 'Zadna data'}`
+}
 
 export async function POST(request: NextRequest) {
   try {
     const { query } = await request.json()
-    if (!query) return NextResponse.json({ error: 'Chybí dotaz' }, { status: 400 })
-    if (!global.ordersData || global.ordersData.length === 0) return NextResponse.json({ error: 'Nejprve nahrajte data' }, { status: 400 })
-    const apiKey = process.env.ANTHROPIC_API_KEY
-    if (!apiKey) return NextResponse.json({ error: 'Chybí API klíč' }, { status: 500 })
-    const columns = Object.keys(global.ordersData[0])
-    const sampleRow = global.ordersData[0]
-    const systemPrompt = `Jsi analytický asistent. Data: ${global.ordersData.length} záznamů. Sloupce: ${columns.join(', ')}. Ukázka: ${JSON.stringify(sampleRow)}. Odpověz JSON: {"thinking":"..","code":"data.filter(...)","explanation":".."} Kód musí být výraz vracející pole. Limit 100.`
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1024, messages: [{ role: 'user', content: query }], system: systemPrompt })
+    if (!query) return NextResponse.json({ error: 'Query is required' }, { status: 400 })
+
+    const schemaInfo = await getSchemaInfo()
+    const sqlResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: `Jsi expert na databaze. ${schemaInfo}
+Uzivatelsky dotaz: "${query}"
+Vygeneruj JSON: {"select": "sloupce", "filters": [{"column": "x", "operator": "eq|gt|lt|like|ilike", "value": "y"}], "order": {"column": "x", "ascending": true}, "limit": 50, "aggregation": null|{"type": "count|sum|avg", "column": "x", "groupBy": "y"}}
+Odpovez POUZE validnim JSON.` }]
     })
-    if (!response.ok) return NextResponse.json({ error: 'Chyba API' }, { status: 500 })
-    const claudeResponse = await response.json()
-    const content = claudeResponse.content[0]?.text || ''
-    let parsed
+
+    const sqlText = sqlResponse.content[0].type === 'text' ? sqlResponse.content[0].text : ''
+    let queryConfig
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/)
-      if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
-      else throw new Error('No JSON')
-    } catch (e) { return NextResponse.json({ answer: content, results: [] }) }
+      const jsonMatch = sqlText.match(/\{[\s\S]*\}/)
+      queryConfig = jsonMatch ? JSON.parse(jsonMatch[0]) : { select: '*', filters: [], limit: 20 }
+    } catch { queryConfig = { select: '*', filters: [], limit: 20 } }
+
     let results: any[] = []
-    try {
-      const data = global.ordersData
-      const safeEval = new Function('data', `return ${parsed.code}`)
-      results = safeEval(data)
-      if (!Array.isArray(results)) results = [results]
-      results = results.slice(0, 100)
-    } catch (evalError: any) { return NextResponse.json({ answer: `Chyba: ${evalError.message}`, results: [] }) }
-    return NextResponse.json({ answer: parsed.explanation || 'Hotovo', results })
-  } catch (error: any) { return NextResponse.json({ error: error.message }, { status: 500 }) }
+    if (queryConfig.aggregation) {
+      const agg = queryConfig.aggregation
+      if (agg.type === 'count' && !agg.groupBy) {
+        const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true })
+        results = [{ pocet: count || 0 }]
+      } else if (agg.groupBy) {
+        const { data } = await supabase.from('orders').select(queryConfig.select || '*')
+        if (data) {
+          const grouped = new Map<string, { count: number; sum: number }>()
+          for (const row of data) {
+            const key = (row as any)[agg.groupBy] || 'Unknown'
+            const current = grouped.get(key) || { count: 0, sum: 0 }
+            current.count++
+            if (agg.column && (row as any)[agg.column]) current.sum += parseFloat((row as any)[agg.column]) || 0
+            grouped.set(key, current)
+          }
+          results = Array.from(grouped.entries()).map(([key, value]) => ({
+            [agg.groupBy]: key, pocet: value.count,
+            ...(agg.type === 'sum' ? { suma: Math.round(value.sum * 100) / 100 } : {}),
+            ...(agg.type === 'avg' ? { prumer: Math.round((value.sum / value.count) * 100) / 100 } : {})
+          })).sort((a, b) => b.pocet - a.pocet)
+        }
+      }
+    } else {
+      let dbQuery = supabase.from('orders').select(queryConfig.select || '*')
+      if (queryConfig.filters) {
+        for (const f of queryConfig.filters) {
+          if (f.operator === 'eq') dbQuery = dbQuery.eq(f.column, f.value)
+          else if (f.operator === 'gt') dbQuery = dbQuery.gt(f.column, f.value)
+          else if (f.operator === 'lt') dbQuery = dbQuery.lt(f.column, f.value)
+          else if (f.operator === 'like') dbQuery = dbQuery.like(f.column, `%${f.value}%`)
+          else if (f.operator === 'ilike') dbQuery = dbQuery.ilike(f.column, `%${f.value}%`)
+        }
+      }
+      if (queryConfig.order) dbQuery = dbQuery.order(queryConfig.order.column, { ascending: queryConfig.order.ascending ?? true })
+      dbQuery = dbQuery.limit(queryConfig.limit || 50)
+      const { data, error } = await dbQuery
+      if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
+      results = data || []
+    }
+
+    const answerResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 500,
+      messages: [{ role: 'user', content: `Uzivatel se ptal: "${query}"
+Vysledky (${results.length} zaznamu): ${JSON.stringify(results.slice(0, 10), null, 2)}
+Odpovez kratce v cestine.` }]
+    })
+
+    const answer = answerResponse.content[0].type === 'text' ? answerResponse.content[0].text : 'Nemohu zpracovat odpoved.'
+    return NextResponse.json({ answer, results: results.slice(0, 100) })
+  } catch (error: any) {
+    console.error('Query error:', error)
+    return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] }, { status: 500 })
+  }
 }
