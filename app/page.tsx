@@ -1,14 +1,41 @@
 'use client'
-import { useState, useRef } from 'react'
+
+import { useState, useRef, useEffect } from 'react'
+
+interface UploadedFile {
+  name: string
+  records: number
+  uploadedAt: string
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<any[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [queryLoading, setQueryLoading] = useState(false)
   const [dataLoaded, setDataLoaded] = useState(false)
   const [recordCount, setRecordCount] = useState(0)
   const [uploading, setUploading] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Load record count on mount
+  useEffect(() => {
+    fetchRecordCount()
+  }, [])
+
+  const fetchRecordCount = async () => {
+    try {
+      const res = await fetch('/api/count')
+      const data = await res.json()
+      if (data.count > 0) {
+        setRecordCount(data.count)
+        setDataLoaded(true)
+      }
+    } catch (e) {
+      console.error('Failed to fetch count:', e)
+    }
+  }
 
   const handleUpload = async (e: any) => {
     const files = e.target.files
@@ -21,180 +48,314 @@ export default function Home() {
     }
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData })
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      })
       const data = await res.json()
+      
       if (data.success) {
+        // Add to uploaded files list
+        const newFiles: UploadedFile[] = []
+        for (let i = 0; i < files.length; i++) {
+          newFiles.push({
+            name: files[i].name,
+            records: Math.floor(data.totalRecords / files.length),
+            uploadedAt: new Date().toLocaleString('cs-CZ')
+          })
+        }
+        setUploadedFiles(prev => [...prev, ...newFiles])
+        setRecordCount(prev => prev + data.totalRecords)
         setDataLoaded(true)
-        setRecordCount(data.totalRecords)
-        setMessages([{ role: 'assistant', content: `Nahráno ${data.totalRecords} záznamů do databáze` }])
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `Nahráno ${data.totalRecords} záznamů do databáze` 
+        }])
       } else {
-        setMessages([{ role: 'assistant', content: `Chyba: ${data.error}` }])
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `Chyba: ${data.error}` 
+        }])
       }
-    } catch (err: any) {
-      setMessages([{ role: 'assistant', content: `Chyba při nahrávání: ${err.message}` }])
-    } finally {
-      setUploading(false)
+    } catch (error) {
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'Chyba při nahrávání souboru' 
+      }])
+    }
+    
+    setUploading(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
     }
   }
 
-  const handleSubmit = async (e: any) => {
-    e.preventDefault()
-    if (!input.trim() || loading) return
+  const handleClearData = async () => {
+    if (!confirm('Opravdu chcete smazat všechna data z databáze?')) return
+    
+    try {
+      const res = await fetch('/api/clear', { method: 'POST' })
+      const data = await res.json()
+      
+      if (data.success) {
+        setRecordCount(0)
+        setDataLoaded(false)
+        setUploadedFiles([])
+        setMessages([{ role: 'assistant', content: 'Databáze byla vymazána' }])
+      }
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Chyba při mazání dat' }])
+    }
+  }
 
-    const userMessage = input
-    setMessages(p => [...p, { role: 'user', content: userMessage }])
+  const handleQuery = async () => {
+    if (!input.trim()) return
+
+    const userMessage = { role: 'user', content: input }
+    setMessages(prev => [...prev, userMessage])
     setInput('')
-    setLoading(true)
+    setQueryLoading(true)
 
     try {
       const res = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMessage })
+        body: JSON.stringify({ query: input })
       })
       const data = await res.json()
-      setMessages(p => [...p, { role: 'assistant', content: data.answer, data: data.results }])
-    } catch (err: any) {
-      setMessages(p => [...p, { role: 'assistant', content: `Chyba: ${err.message}` }])
-    } finally {
-      setLoading(false)
+      
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: data.answer || data.error || 'Žádná odpověď'
+      }])
+    } catch (error) {
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'Chyba při zpracování dotazu'
+      }])
     }
+    
+    setQueryLoading(false)
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: 20 }}>
-      <div style={{ maxWidth: 1000, margin: '0 auto', background: 'white', borderRadius: 16, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
-        <div style={{ background: 'linear-gradient(90deg, #1a1a2e 0%, #16213e 100%)', padding: 24, color: 'white', borderRadius: '16px 16px 0 0' }}>
-          <h1 style={{ margin: 0, fontSize: 28 }}>Orders AI Query</h1>
-          <p style={{ margin: '8px 0 0', opacity: 0.8, fontSize: 14 }}>Nahrávejte CSV/Excel soubory a ptejte se v češtině</p>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      <div style={{ maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
+        {/* Header */}
+        <div style={{ background: '#1a1a2e', borderRadius: '12px', padding: '20px', marginBottom: '20px', color: 'white' }}>
+          <h1 style={{ margin: 0, fontSize: '24px' }}>Orders AI Query</h1>
+          <p style={{ margin: '5px 0 0', opacity: 0.7 }}>Nahrávejte CSV/Excel soubory a ptejte se v češtině</p>
         </div>
 
-        {!dataLoaded && (
-          <div style={{ padding: 60, textAlign: 'center' }}>
-            <div style={{ marginBottom: 20 }}>
-              <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#667eea" strokeWidth="1.5">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="12" y1="18" x2="12" y2="12"/>
-                <line x1="9" y1="15" x2="15" y2="15"/>
-              </svg>
-            </div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleUpload}
-              accept=".xlsx,.csv,.xls"
-              multiple
-              hidden
-            />
+        {/* Status bar */}
+        {dataLoaded && (
+          <div style={{ 
+            background: '#d4edda', 
+            color: '#155724', 
+            padding: '12px 20px', 
+            borderRadius: '8px', 
+            marginBottom: '20px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <span>✓ Načteno {recordCount.toLocaleString('cs-CZ')} záznamů</span>
             <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              onClick={handleClearData}
               style={{
-                background: uploading ? '#ccc' : 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
+                background: '#dc3545',
                 color: 'white',
                 border: 'none',
-                padding: '16px 40px',
-                borderRadius: 8,
-                cursor: uploading ? 'wait' : 'pointer',
-                fontSize: 16,
-                fontWeight: 600,
-                transition: 'transform 0.2s'
+                padding: '6px 12px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px'
               }}
             >
-              {uploading ? 'Nahrávám...' : 'Nahrát soubory'}
+              🗑️ Smazat data
             </button>
-            <p style={{ marginTop: 16, color: '#666', fontSize: 14 }}>
-              Podporované formáty: CSV, XLS, XLSX
-            </p>
           </div>
         )}
 
-        {dataLoaded && (
-          <div style={{ padding: '12px 20px', background: 'linear-gradient(90deg, #d4edda 0%, #c3e6cb 100%)', borderBottom: '1px solid #b8daff' }}>
-            <span style={{ color: '#155724', fontWeight: 500 }}>✓ Načteno {recordCount.toLocaleString()} záznamů</span>
-          </div>
-        )}
-
-        <div style={{ height: 450, overflowY: 'auto', padding: 20 }}>
-          {messages.length === 0 && dataLoaded && (
-            <div style={{ textAlign: 'center', color: '#999', paddingTop: 40 }}>
-              <p>Zadejte dotaz v češtině, např.:</p>
-              <p style={{ fontStyle: 'italic' }}>"Kolik objednávek bylo z České republiky?"</p>
-              <p style={{ fontStyle: 'italic' }}>"Ukaž mi top 10 zákazníků podle celkové ceny"</p>
-            </div>
-          )}
-          {messages.map((m, i) => (
-            <div key={i} style={{ marginBottom: 20 }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 12,
-                flexDirection: m.role === 'user' ? 'row-reverse' : 'row'
-              }}>
-                <div style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  background: m.role === 'user' ? '#667eea' : '#1a1a2e',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'white',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  flexShrink: 0
-                }}>
-                  {m.role === 'user' ? 'Vy' : 'AI'}
-                </div>
-                <div style={{
-                  background: m.role === 'user' ? '#667eea' : '#f8f9fa',
-                  color: m.role === 'user' ? 'white' : '#333',
-                  padding: '12px 16px',
-                  borderRadius: 12,
-                  maxWidth: '80%'
-                }}>
-                  {m.content}
-                </div>
-              </div>
-              {m.data?.length > 0 && (
-                <div style={{ marginTop: 12, marginLeft: 48, overflowX: 'auto' }}>
-                  <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', background: 'white', borderRadius: 8, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-                    <thead>
-                      <tr style={{ background: '#f1f3f4' }}>
-                        {Object.keys(m.data[0]).slice(0, 8).map(k => (
-                          <th key={k} style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '2px solid #dee2e6' }}>{k}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {m.data.slice(0, 20).map((r: any, j: number) => (
-                        <tr key={j} style={{ background: j % 2 === 0 ? 'white' : '#f8f9fa' }}>
-                          {Object.values(r).slice(0, 8).map((v: any, k) => (
-                            <td key={k} style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{String(v).substring(0, 50)}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {m.data.length > 20 && <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>Zobrazeno 20 z {m.data.length} záznamů</p>}
-                </div>
+        {/* File upload section */}
+        <div style={{ 
+          background: 'white', 
+          borderRadius: '12px', 
+          padding: '20px', 
+          marginBottom: '20px',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: uploadedFiles.length > 0 ? '15px' : '0' }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.csv,.xls"
+              multiple
+              onChange={handleUpload}
+              style={{ display: 'none' }}
+              id="file-upload"
+            />
+            <label
+              htmlFor="file-upload"
+              style={{
+                background: uploading ? '#6c757d' : '#28a745',
+                color: 'white',
+                padding: '10px 20px',
+                borderRadius: '8px',
+                cursor: uploading ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              {uploading ? (
+                <>
+                  <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span>
+                  Nahrávám...
+                </>
+              ) : (
+                <>📁 {dataLoaded ? 'Přidat další soubory' : 'Nahrát soubory'}</>
               )}
-            </div>
-          ))}
-          {loading && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#1a1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14 }}>AI</div>
-              <div style={{ color: '#666' }}>Přemýšlím...</div>
+            </label>
+            <span style={{ color: '#666', fontSize: '14px' }}>CSV, XLS, XLSX</span>
+          </div>
+
+          {/* Uploaded files list */}
+          {uploadedFiles.length > 0 && (
+            <div style={{ borderTop: '1px solid #eee', paddingTop: '15px' }}>
+              <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Nahrané soubory:</div>
+              {uploadedFiles.map((file, index) => (
+                <div key={index} style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  padding: '8px 12px',
+                  background: '#f8f9fa',
+                  borderRadius: '4px',
+                  marginBottom: '5px',
+                  fontSize: '14px'
+                }}>
+                  <span>📄 {file.name}</span>
+                  <span style={{ color: '#666' }}>{file.records} záznamů • {file.uploadedAt}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        <form onSubmit={handleSubmit} style={{ padding: 20, borderTop: '1px solid #eee', display: 'flex', gap: 12 }}>
-          <input value={input} onChange={e => setInput(e.target.value)} placeholder="Zadejte dotaz v češtině..." disabled={!dataLoaded || loading} style={{ flex: 1, padding: '14px 16px', border: '2px solid #e0e0e0', borderRadius: 8, fontSize: 15, outline: 'none' }} />
-          <button type="submit" disabled={!dataLoaded || loading || !input.trim()} style={{ background: (!dataLoaded || loading || !input.trim()) ? '#ccc' : 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', padding: '14px 28px', borderRadius: 8, fontSize: 15, fontWeight: 600, cursor: (!dataLoaded || loading || !input.trim()) ? 'not-allowed' : 'pointer' }}>Odeslat</button>
-        </form>
+        {/* Chat messages */}
+        <div style={{ 
+          background: 'white', 
+          borderRadius: '12px', 
+          padding: '20px', 
+          marginBottom: '20px',
+          minHeight: '300px',
+          maxHeight: '400px',
+          overflowY: 'auto',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}>
+          {messages.length === 0 && (
+            <div style={{ color: '#999', textAlign: 'center', padding: '40px' }}>
+              {dataLoaded ? 'Položte dotaz k datům...' : 'Nejprve nahrajte soubor s daty'}
+            </div>
+          )}
+          {messages.map((msg, i) => (
+            <div key={i} style={{ 
+              display: 'flex', 
+              justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              marginBottom: '12px'
+            }}>
+              <div style={{
+                background: msg.role === 'user' ? '#667eea' : '#f0f0f0',
+                color: msg.role === 'user' ? 'white' : 'black',
+                padding: '10px 15px',
+                borderRadius: '18px',
+                maxWidth: '80%',
+                whiteSpace: 'pre-wrap'
+              }}>
+                {msg.role === 'assistant' && <span style={{ marginRight: '8px' }}>🤖</span>}
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          
+          {/* Loading indicator */}
+          {queryLoading && (
+            <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '12px' }}>
+              <div style={{
+                background: '#f0f0f0',
+                padding: '10px 15px',
+                borderRadius: '18px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px'
+              }}>
+                <span>🤖</span>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <span style={{ animation: 'bounce 0.6s infinite', animationDelay: '0s' }}>●</span>
+                  <span style={{ animation: 'bounce 0.6s infinite', animationDelay: '0.2s' }}>●</span>
+                  <span style={{ animation: 'bounce 0.6s infinite', animationDelay: '0.4s' }}>●</span>
+                </div>
+                <span style={{ color: '#666', fontSize: '14px' }}>Zpracovávám dotaz...</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div style={{ 
+          display: 'flex', 
+          gap: '10px',
+          background: 'white',
+          padding: '15px',
+          borderRadius: '12px',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && !queryLoading && handleQuery()}
+            placeholder={dataLoaded ? "Zeptejte se na data..." : "Nejprve nahrajte soubor"}
+            disabled={!dataLoaded || queryLoading}
+            style={{
+              flex: 1,
+              padding: '12px 15px',
+              border: '2px solid #eee',
+              borderRadius: '8px',
+              fontSize: '16px',
+              outline: 'none'
+            }}
+          />
+          <button
+            onClick={handleQuery}
+            disabled={!dataLoaded || queryLoading || !input.trim()}
+            style={{
+              background: (!dataLoaded || queryLoading || !input.trim()) ? '#ccc' : '#667eea',
+              color: 'white',
+              border: 'none',
+              padding: '12px 25px',
+              borderRadius: '8px',
+              cursor: (!dataLoaded || queryLoading || !input.trim()) ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold'
+            }}
+          >
+            {queryLoading ? '⏳' : '➤'}
+          </button>
+        </div>
       </div>
+
+      <style jsx>{`
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-5px); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   )
 }
