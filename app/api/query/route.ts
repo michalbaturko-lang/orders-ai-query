@@ -23,7 +23,8 @@ export async function POST(request: NextRequest) {
       max_tokens: 1024,
       messages: [{ role: 'user', content: `Jsi expert na databaze. ${schemaInfo}
 Uzivatelsky dotaz: "${query}"
-Vygeneruj JSON: {"select": "sloupce", "filters": [{"column": "x", "operator": "eq|gt|lt|like|ilike", "value": "y"}], "order": {"column": "x", "ascending": true}, "limit": 50, "aggregation": null|{"type": "count|sum|avg", "column": "x", "groupBy": "y"}}
+Vygeneruj JSON: {"select": "sloupce", "filters": [{"column": "x", "operator": "eq|gt|lt|like|ilike", "value": "y"}], "order": {"column": "x", "ascending": true}, "random": false, "limit": 50, "aggregation": null|{"type": "count|sum|avg", "column": "x", "groupBy": "y"}}
+Pro nahodne razeni pouzij "random": true (ne RANDOM v order).
 Odpovez POUZE validnim JSON.` }]
     })
 
@@ -59,7 +60,6 @@ Odpovez POUZE validnim JSON.` }]
         }
       }
     } else {
-      // Fix: Added explicit type annotation to break infinite type chain
       let dbQuery: any = supabase.from('orders').select(queryConfig.select || '*')
       if (queryConfig.filters) {
         for (const f of queryConfig.filters) {
@@ -70,11 +70,24 @@ Odpovez POUZE validnim JSON.` }]
           else if (f.operator === 'ilike') dbQuery = dbQuery.ilike(f.column, `%${f.value}%`)
         }
       }
-      if (queryConfig.order) dbQuery = dbQuery.order(queryConfig.order.column, { ascending: queryConfig.order.ascending ?? true })
-      dbQuery = dbQuery.limit(queryConfig.limit || 50)
+      // Skip invalid order columns like RANDOM()
+      if (queryConfig.order && queryConfig.order.column && !queryConfig.order.column.includes('(')) {
+        dbQuery = dbQuery.order(queryConfig.order.column, { ascending: queryConfig.order.ascending ?? true })
+      }
+      // For random, fetch more and shuffle
+      const fetchLimit = queryConfig.random ? Math.max((queryConfig.limit || 50) * 3, 500) : (queryConfig.limit || 50)
+      dbQuery = dbQuery.limit(fetchLimit)
       const { data, error } = await dbQuery
       if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
       results = data || []
+      // Shuffle if random requested
+      if (queryConfig.random && results.length > 0) {
+        for (let i = results.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [results[i], results[j]] = [results[j], results[i]]
+        }
+        results = results.slice(0, queryConfig.limit || 50)
+      }
     }
 
     const answerResponse = await anthropic.messages.create({
