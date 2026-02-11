@@ -15,10 +15,10 @@ async function getSchemaInfo(tableName: string): Promise<string> {
     columns = 'id, code, date, statusname, currency, exchangerate, email, phone, billfullname, billcompany, billstreet, billhousenumber, billcity, billzip, billcountryname, companyid, vatid, deliveryfullname, deliverycompany, deliverystreet, deliveryhousenumber, deliverycity, deliveryzip, deliverycountryname, totalpricewithvat, totalpricewithoutvat, pricetopay, amountpaid, paid, itemname, itemamount, itemcode, itemvariantname, itemunitpricewithvat, sourcename'
   }
 
-  return \`Databaze obsahuje tabulku "\${tableName}" s \${count || 0} zaznamy.
-Sloupce pro filtrovani: \${columns}
+  return `Databaze obsahuje tabulku "${tableName}" s ${count || 0} zaznamy.
+Sloupce pro filtrovani: ${columns}
 DULEZITE: Nepouzivej sloupec raw_data pro filtrovani!
-Priklady dat: \${sample ? JSON.stringify(sample.slice(0, 2), null, 2) : 'Zadna data'}\`
+Priklady dat: ${sample ? JSON.stringify(sample.slice(0, 2), null, 2) : 'Zadna data'}`
 }
 
 export async function POST(request: NextRequest) {
@@ -34,17 +34,17 @@ export async function POST(request: NextRequest) {
     const sqlResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
-      messages: [{ role: 'user', content: \`Jsi expert na databaze. \${schemaInfo}
-Uzivatelsky dotaz: "\${query}"
+      messages: [{ role: 'user', content: `Jsi expert na databaze. ${schemaInfo}
+Uzivatelsky dotaz: "${query}"
 Vygeneruj JSON: {"select": "sloupce", "filters": [{"column": "x", "operator": "eq|gt|lt|like|ilike", "value": "y"}], "order": {"column": "x", "ascending": true}, "random": false, "limit": 50, "aggregation": null|{"type": "count|sum|avg", "column": "x", "groupBy": "y"}}
 Pro nahodne razeni pouzij "random": true.
-Odpovez POUZE validnim JSON.\` }]
+Odpovez POUZE validnim JSON.` }]
     })
 
     const sqlText = sqlResponse.content[0].type === 'text' ? sqlResponse.content[0].text : ''
     let queryConfig
     try {
-      const jsonMatch = sqlText.match(/\\{[\\s\\S]*\\}/)
+      const jsonMatch = sqlText.match(/\{[\s\S]*\}/)
       queryConfig = jsonMatch ? JSON.parse(jsonMatch[0]) : { select: '*', filters: [], limit: 20 }
     } catch { queryConfig = { select: '*', filters: [], limit: 20 } }
 
@@ -80,8 +80,8 @@ Odpovez POUZE validnim JSON.\` }]
           if (f.operator === 'eq') dbQuery = dbQuery.eq(f.column, f.value)
           else if (f.operator === 'gt') dbQuery = dbQuery.gt(f.column, f.value)
           else if (f.operator === 'lt') dbQuery = dbQuery.lt(f.column, f.value)
-          else if (f.operator === 'like') dbQuery = dbQuery.like(f.column, \`%\${f.value}%\`)
-          else if (f.operator === 'ilike') dbQuery = dbQuery.ilike(f.column, \`%\${f.value}%\`)
+          else if (f.operator === 'like') dbQuery = dbQuery.like(f.column, `%${f.value}%`)
+          else if (f.operator === 'ilike') dbQuery = dbQuery.ilike(f.column, `%${f.value}%`)
         }
       }
       if (queryConfig.order && queryConfig.order.column && !queryConfig.order.column.includes('(')) {
@@ -90,7 +90,7 @@ Odpovez POUZE validnim JSON.\` }]
       const fetchLimit = queryConfig.random ? Math.max((queryConfig.limit || 50) * 3, 500) : (queryConfig.limit || 50)
       dbQuery = dbQuery.limit(fetchLimit)
       const { data, error } = await dbQuery
-      if (error) return NextResponse.json({ answer: \`Chyba: \${error.message}\`, results: [] })
+      if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
       results = data || []
       if (queryConfig.random && results.length > 0) {
         for (let i = results.length - 1; i > 0; i--) {
@@ -104,15 +104,15 @@ Odpovez POUZE validnim JSON.\` }]
     const answerResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 500,
-      messages: [{ role: 'user', content: \`Uzivatel se ptal: "\${query}"
-Vysledky (\${results.length} zaznamu): \${JSON.stringify(results.slice(0, 10), null, 2)}
-Odpovez kratce v cestine.\` }]
+      messages: [{ role: 'user', content: `Uzivatel se ptal: "${query}"
+Vysledky (${results.length} zaznamu): ${JSON.stringify(results.slice(0, 10), null, 2)}
+Odpovez kratce v cestine.` }]
     })
 
     const answer = answerResponse.content[0].type === 'text' ? answerResponse.content[0].text : 'Nemohu zpracovat odpoved.'
     return NextResponse.json({ answer, results: results.slice(0, 100) })
   } catch (error: any) {
     console.error('Query error:', error)
-    return NextResponse.json({ answer: \`Chyba: \${error.message}\`, results: [] }, { status: 500 })
+    return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] }, { status: 500 })
   }
 }
