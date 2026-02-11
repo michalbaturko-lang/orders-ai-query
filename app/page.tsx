@@ -24,6 +24,8 @@ export default function Home() {
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null)
   const [dataSource, setDataSource] = useState<string>('files')
   const [supabaseTableCount, setSupabaseTableCount] = useState<{orders_cz: number, orders_sk: number}>({orders_cz: 0, orders_sk: 0})
+  const [exporting, setExporting] = useState(false)
+  const [exportResults, setExportResults] = useState<any[] | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { fetchData() }, [])
@@ -80,6 +82,47 @@ export default function Home() {
     setQueryLoading(false)
   }
 
+  const handleExport = async (cityFilter?: string) => {
+    setExporting(true)
+    setExportResults(null)
+    try {
+      const res = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataSource, cityFilter, limit: 100 })
+      })
+      const data = await res.json()
+      if (data.orders) {
+        setExportResults(data.orders)
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `Export dokončen: ${data.count} objednávek${cityFilter ? ` z města "${cityFilter}"` : ''} (celkem ${data.totalUniqueOrders?.toLocaleString('cs-CZ') || '?'} unikátních objednávek)`
+        }])
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Chyba exportu: ${data.error}` }])
+      }
+    } catch (e: any) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Chyba: ${e.message}` }])
+    }
+    setExporting(false)
+  }
+
+  const downloadCSV = () => {
+    if (!exportResults || exportResults.length === 0) return
+    const headers = Object.keys(exportResults[0])
+    const csv = [
+      headers.join(';'),
+      ...exportResults.map(row => headers.map(h => `"${(row[h] || '').toString().replace(/"/g, '""')}"`).join(';'))
+    ].join('\n')
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `export_top100_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const hasData = dataLoaded || supabaseTableCount.orders_cz > 0 || supabaseTableCount.orders_sk > 0
 
   return (
@@ -93,11 +136,23 @@ export default function Home() {
         {(uploadedFiles.length > 0 || supabaseTableCount.orders_cz > 0 || supabaseTableCount.orders_sk > 0) && (
           <div style={{ background: '#1a1a2e', color: 'white', padding: '15px 20px', borderRadius: '8px', marginBottom: '20px' }}>
             <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>Zdroj dat:</div>
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '15px' }}>
               {uploadedFiles.length > 0 && <button onClick={() => setDataSource('files')} style={{ background: dataSource === 'files' ? '#28a745' : '#333', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer' }}>📁 Soubory ({recordCount.toLocaleString('cs-CZ')})</button>}
               {supabaseTableCount.orders_cz > 0 && <button onClick={() => setDataSource('orders_cz')} style={{ background: dataSource === 'orders_cz' ? '#28a745' : '#333', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer' }}>🇨🇿 CZ ({supabaseTableCount.orders_cz.toLocaleString('cs-CZ')})</button>}
               {supabaseTableCount.orders_sk > 0 && <button onClick={() => setDataSource('orders_sk')} style={{ background: dataSource === 'orders_sk' ? '#28a745' : '#333', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer' }}>🇸🇰 SK ({supabaseTableCount.orders_sk.toLocaleString('cs-CZ')})</button>}
             </div>
+            {(dataSource === 'orders_cz' || dataSource === 'orders_sk') && (
+              <div>
+                <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>Export top 100 objednávek:</div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button onClick={() => handleExport()} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 100 (vše)'}</button>
+                  <button onClick={() => handleExport('Praha')} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 100 Praha'}</button>
+                  {exportResults && exportResults.length > 0 && (
+                    <button onClick={downloadCSV} style={{ background: '#28a745', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer' }}>💾 Stáhnout CSV</button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -117,6 +172,38 @@ export default function Home() {
           <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleQuery()} placeholder="Zeptejte se..." disabled={!hasData} style={{ flex: 1, padding: '12px', border: '2px solid #eee', borderRadius: '8px' }} />
           <button onClick={handleQuery} disabled={!hasData || !input.trim()} style={{ background: hasData && input.trim() ? '#667eea' : '#ccc', color: 'white', border: 'none', padding: '12px 25px', borderRadius: '8px', cursor: hasData && input.trim() ? 'pointer' : 'not-allowed' }}>➤</button>
         </div>
+
+        {exportResults && exportResults.length > 0 && (
+          <div style={{ background: 'white', borderRadius: '12px', padding: '20px', marginTop: '20px', overflowX: 'auto' }}>
+            <h3 style={{ margin: '0 0 15px', color: '#333' }}>Top {exportResults.length} objednávek</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ background: '#667eea', color: 'white' }}>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>#</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Kód</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Datum</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Zákazník</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Město</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Cena</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {exportResults.map((order, i) => (
+                  <tr key={i} style={{ background: i % 2 === 0 ? '#f9f9f9' : 'white', borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: '8px 10px' }}>{i + 1}</td>
+                    <td style={{ padding: '8px 10px', fontFamily: 'monospace' }}>{order.code}</td>
+                    <td style={{ padding: '8px 10px' }}>{order.date}</td>
+                    <td style={{ padding: '8px 10px' }}>{order.billfullname}</td>
+                    <td style={{ padding: '8px 10px' }}>{order.billcity || order.deliverycity}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 'bold' }}>{parseFloat(order.totalpricewithvat || 0).toLocaleString('cs-CZ')} Kč</td>
+                    <td style={{ padding: '8px 10px' }}>{order.statusname}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )
