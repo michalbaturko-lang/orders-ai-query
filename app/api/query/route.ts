@@ -50,9 +50,15 @@ export async function POST(request: NextRequest) {
       messages: [{ role: 'user', content: `Jsi expert na databaze. ${schemaInfo}
 Uzivatelsky dotaz: "${query}"
 Vygeneruj JSON: {"select": "sloupce", "filters": [{"column": "x", "operator": "eq|gt|lt|like|ilike|gte|lte", "value": "y"}], "order": {"column": "x", "ascending": true}, "random": false, "limit": 50, "aggregation": null|{"type": "count|countDistinct|sum|avg", "column": "x", "groupBy": "y"}}
-Pro pocet OBJEDNAVEK (ne radku) pouzij "type": "countDistinct", "column": "code"
-Pro filtrovani podle roku pouzij "gte" a "lte" na sloupec "date", napr. filters: [{"column": "date", "operator": "gte", "value": "2024-01-01"}, {"column": "date", "operator": "lte", "value": "2024-12-31"}]
-Pro nahodne razeni pouzij "random": true.
+
+DULEZITE PRAVIDLA:
+- Pro pocet OBJEDNAVEK pouzij "type": "countDistinct", "column": "code"
+- Pro filtrovani roku: filters [{"column": "date", "operator": "gte", "value": "YYYY-01-01"}, {"column": "date", "operator": "lte", "value": "YYYY-12-31"}]
+- Pro NEJVETSI/NEJDRAZSI objednavky: order by "totalpricewithvat" ascending: false
+- Pro NEJMENSI/NEJLEVNEJSI: order by "totalpricewithvat" ascending: true
+- Pro nahodne razeni: "random": true
+- Sloupec totalpricewithvat obsahuje celkovou cenu objednavky v Kc
+
 Odpovez POUZE validnim JSON.` }]
     })
 
@@ -83,37 +89,101 @@ Odpovez POUZE validnim JSON.` }]
       }
 
       if (agg.type === 'countDistinct' && agg.column) {
-        // Count unique values (e.g., unique order codes)
-        const { data } = await baseQuery
-        if (data) {
-          const uniqueValues = new Set(data.map((row: any) => row[agg.column]))
-          results = [{ pocet_objednavek: uniqueValues.size }]
+        // Count unique values using pagination to get ALL data
+        const uniqueValues = new Set<string>()
+        const pageSize = 1000
+        let offset = 0
+        let hasMore = true
+
+        while (hasMore) {
+          let pageQuery: any = supabase.from(tableName).select(agg.column)
+
+          // Apply filters
+          if (queryConfig.filters) {
+            for (const f of queryConfig.filters) {
+              if (f.column === 'raw_data') continue
+              if (f.operator === 'eq') pageQuery = pageQuery.eq(f.column, f.value)
+              else if (f.operator === 'gt') pageQuery = pageQuery.gt(f.column, f.value)
+              else if (f.operator === 'gte') pageQuery = pageQuery.gte(f.column, f.value)
+              else if (f.operator === 'lt') pageQuery = pageQuery.lt(f.column, f.value)
+              else if (f.operator === 'lte') pageQuery = pageQuery.lte(f.column, f.value)
+              else if (f.operator === 'like') pageQuery = pageQuery.like(f.column, `%${f.value}%`)
+              else if (f.operator === 'ilike') pageQuery = pageQuery.ilike(f.column, `%${f.value}%`)
+            }
+          }
+
+          const { data, error } = await pageQuery.range(offset, offset + pageSize - 1)
+
+          if (error || !data || data.length === 0) {
+            hasMore = false
+          } else {
+            data.forEach((row: any) => {
+              if (row[agg.column]) uniqueValues.add(row[agg.column])
+            })
+            offset += pageSize
+            hasMore = data.length === pageSize
+          }
         }
+
+        results = [{ pocet_objednavek: uniqueValues.size }]
       } else if (agg.type === 'count' && !agg.groupBy) {
         const { count } = await supabase.from(tableName).select('*', { count: 'exact', head: true })
         results = [{ pocet_radku: count || 0 }]
       } else if (agg.groupBy) {
-        const { data } = await baseQuery.select(queryConfig.select || '*')
-        if (data) {
-          const grouped = new Map<string, { count: number; sum: number; uniqueCodes: Set<string> }>()
-          for (const row of data) {
-            const key = (row as any)[agg.groupBy] || 'Unknown'
-            const current = grouped.get(key) || { count: 0, sum: 0, uniqueCodes: new Set() }
-            current.count++
-            if ((row as any).code) current.uniqueCodes.add((row as any).code)
-            if (agg.column && (row as any)[agg.column]) current.sum += parseFloat((row as any)[agg.column]) || 0
-            grouped.set(key, current)
+        // Use pagination for groupBy aggregations to get ALL data
+        const grouped = new Map<string, { count: number; sum: number; uniqueCodes: Set<string> }>()
+        const pageSize = 1000
+        let offset = 0
+        let hasMore = true
+        const selectCols = agg.groupBy + ',code' + (agg.column ? ',' + agg.column : '')
+
+        while (hasMore) {
+          let pageQuery: any = supabase.from(tableName).select(selectCols)
+
+          // Apply filters
+          if (queryConfig.filters) {
+            for (const f of queryConfig.filters) {
+              if (f.column === 'raw_data') continue
+              if (f.operator === 'eq') pageQuery = pageQuery.eq(f.column, f.value)
+              else if (f.operator === 'gt') pageQuery = pageQuery.gt(f.column, f.value)
+              else if (f.operator === 'gte') pageQuery = pageQuery.gte(f.column, f.value)
+              else if (f.operator === 'lt') pageQuery = pageQuery.lt(f.column, f.value)
+              else if (f.operator === 'lte') pageQuery = pageQuery.lte(f.column, f.value)
+              else if (f.operator === 'like') pageQuery = pageQuery.like(f.column, `%${f.value}%`)
+              else if (f.operator === 'ilike') pageQuery = pageQuery.ilike(f.column, `%${f.value}%`)
+            }
           }
-          results = Array.from(grouped.entries()).map(([key, value]) => ({
-            [agg.groupBy]: key,
-            pocet_objednavek: value.uniqueCodes.size,
-            pocet_polozek: value.count,
-            ...(agg.type === 'sum' ? { suma: Math.round(value.sum * 100) / 100 } : {}),
-            ...(agg.type === 'avg' ? { prumer: Math.round((value.sum / value.count) * 100) / 100 } : {})
-          })).sort((a, b) => b.pocet_objednavek - a.pocet_objednavek)
+
+          const { data, error } = await pageQuery.range(offset, offset + pageSize - 1)
+
+          if (error || !data || data.length === 0) {
+            hasMore = false
+          } else {
+            for (const row of data) {
+              const key = (row as any)[agg.groupBy] || 'Unknown'
+              const current = grouped.get(key) || { count: 0, sum: 0, uniqueCodes: new Set() }
+              current.count++
+              if ((row as any).code) current.uniqueCodes.add((row as any).code)
+              if (agg.column && (row as any)[agg.column]) current.sum += parseFloat((row as any)[agg.column]) || 0
+              grouped.set(key, current)
+            }
+            offset += pageSize
+            hasMore = data.length === pageSize
+          }
         }
+
+        results = Array.from(grouped.entries()).map(([key, value]) => ({
+          [agg.groupBy]: key,
+          pocet_objednavek: value.uniqueCodes.size,
+          pocet_polozek: value.count,
+          ...(agg.type === 'sum' ? { suma: Math.round(value.sum * 100) / 100 } : {}),
+          ...(agg.type === 'avg' ? { prumer: Math.round((value.sum / value.count) * 100) / 100 } : {})
+        })).sort((a, b) => b.pocet_objednavek - a.pocet_objednavek)
       }
     } else {
+      // Special handling for price ordering - fetch more data and sort in JS because price is stored as string
+      const isPriceOrder = queryConfig.order?.column === 'totalpricewithvat' || queryConfig.order?.column === 'totalpricewithoutvat' || queryConfig.order?.column === 'pricetopay'
+
       let dbQuery: any = supabase.from(tableName).select(queryConfig.select || '*')
       if (queryConfig.filters) {
         for (const f of queryConfig.filters) {
@@ -127,20 +197,71 @@ Odpovez POUZE validnim JSON.` }]
           else if (f.operator === 'ilike') dbQuery = dbQuery.ilike(f.column, `%${f.value}%`)
         }
       }
-      if (queryConfig.order && queryConfig.order.column && !queryConfig.order.column.includes('(')) {
-        dbQuery = dbQuery.order(queryConfig.order.column, { ascending: queryConfig.order.ascending ?? true })
-      }
-      const fetchLimit = queryConfig.random ? Math.max((queryConfig.limit || 50) * 3, 500) : (queryConfig.limit || 50)
-      dbQuery = dbQuery.limit(fetchLimit)
-      const { data, error } = await dbQuery
-      if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
-      results = data || []
-      if (queryConfig.random && results.length > 0) {
-        for (let i = results.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [results[i], results[j]] = [results[j], results[i]]
+
+      // For price ordering, fetch ALL data and sort properly
+      if (isPriceOrder) {
+        const allResults: any[] = []
+        const pageSize = 1000
+        let offset = 0
+        let hasMore = true
+
+        while (hasMore) {
+          let pageQuery: any = supabase.from(tableName).select(queryConfig.select || '*')
+          if (queryConfig.filters) {
+            for (const f of queryConfig.filters) {
+              if (f.column === 'raw_data') continue
+              if (f.operator === 'eq') pageQuery = pageQuery.eq(f.column, f.value)
+              else if (f.operator === 'gte') pageQuery = pageQuery.gte(f.column, f.value)
+              else if (f.operator === 'lte') pageQuery = pageQuery.lte(f.column, f.value)
+              else if (f.operator === 'ilike') pageQuery = pageQuery.ilike(f.column, `%${f.value}%`)
+            }
+          }
+          const { data, error } = await pageQuery.range(offset, offset + pageSize - 1)
+          if (error || !data || data.length === 0) {
+            hasMore = false
+          } else {
+            allResults.push(...data)
+            offset += pageSize
+            hasMore = data.length === pageSize
+          }
         }
-        results = results.slice(0, queryConfig.limit || 50)
+
+        // Get unique orders by code, keeping highest price
+        const orderMap = new Map<string, any>()
+        for (const row of allResults) {
+          const existing = orderMap.get(row.code)
+          const rowPrice = parseFloat(row.totalpricewithvat || row.totalpricewithoutvat || '0')
+          const existingPrice = existing ? parseFloat(existing.totalpricewithvat || existing.totalpricewithoutvat || '0') : 0
+          if (!existing || rowPrice > existingPrice) {
+            orderMap.set(row.code, row)
+          }
+        }
+
+        // Sort by price numerically
+        const priceCol = queryConfig.order.column
+        results = Array.from(orderMap.values())
+          .sort((a, b) => {
+            const priceA = parseFloat(a[priceCol] || '0')
+            const priceB = parseFloat(b[priceCol] || '0')
+            return queryConfig.order.ascending ? priceA - priceB : priceB - priceA
+          })
+          .slice(0, queryConfig.limit || 50)
+      } else {
+        if (queryConfig.order && queryConfig.order.column && !queryConfig.order.column.includes('(')) {
+          dbQuery = dbQuery.order(queryConfig.order.column, { ascending: queryConfig.order.ascending ?? true })
+        }
+        const fetchLimit = queryConfig.random ? Math.max((queryConfig.limit || 50) * 3, 500) : (queryConfig.limit || 50)
+        dbQuery = dbQuery.limit(fetchLimit)
+        const { data, error } = await dbQuery
+        if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
+        results = data || []
+        if (queryConfig.random && results.length > 0) {
+          for (let i = results.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [results[i], results[j]] = [results[j], results[i]]
+          }
+          results = results.slice(0, queryConfig.limit || 50)
+        }
       }
     }
 
