@@ -89,7 +89,7 @@ export default function Home() {
       const res = await fetch('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataSource, cityFilter, limit: 100 })
+        body: JSON.stringify({ dataSource, cityFilter, limit: 1000 })
       })
       const data = await res.json()
       if (data.orders) {
@@ -118,7 +118,7 @@ export default function Home() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `export_top100_${new Date().toISOString().slice(0,10)}.csv`
+    a.download = `export_top1000_${new Date().toISOString().slice(0,10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -143,10 +143,10 @@ export default function Home() {
             </div>
             {(dataSource === 'orders_cz' || dataSource === 'orders_sk') && (
               <div>
-                <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>Export top 100 objednávek:</div>
+                <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '10px' }}>Export top 1000 objednávek dle ceny:</div>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                  <button onClick={() => handleExport()} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 100 (vše)'}</button>
-                  <button onClick={() => handleExport('Praha')} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 100 Praha'}</button>
+                  <button onClick={() => handleExport()} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 1000 (vše)'}</button>
+                  <button onClick={() => handleExport('Praha')} disabled={exporting} style={{ background: exporting ? '#555' : '#764ba2', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: exporting ? 'wait' : 'pointer' }}>{exporting ? '⏳ Exportuji...' : '📊 Top 1000 Praha'}</button>
                   {exportResults && exportResults.length > 0 && (
                     <button onClick={downloadCSV} style={{ background: '#28a745', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer' }}>💾 Stáhnout CSV</button>
                   )}
