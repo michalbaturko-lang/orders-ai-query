@@ -198,37 +198,34 @@ Odpovez POUZE validnim JSON.` }]
         }
       }
 
-      // For price ordering, fetch ALL data and sort properly
+      // For price ordering, fetch top 5000 by string order (captures high-digit prices)
+      // Then sort numerically to get correct order - much faster than fetching all data
       if (isPriceOrder) {
-        const allResults: any[] = []
-        const pageSize = 1000
-        let offset = 0
-        let hasMore = true
+        const fetchLimit = 5000
+        let priceQuery: any = supabase.from(tableName).select(queryConfig.select || '*')
 
-        while (hasMore) {
-          let pageQuery: any = supabase.from(tableName).select(queryConfig.select || '*')
-          if (queryConfig.filters) {
-            for (const f of queryConfig.filters) {
-              if (f.column === 'raw_data') continue
-              if (f.operator === 'eq') pageQuery = pageQuery.eq(f.column, f.value)
-              else if (f.operator === 'gte') pageQuery = pageQuery.gte(f.column, f.value)
-              else if (f.operator === 'lte') pageQuery = pageQuery.lte(f.column, f.value)
-              else if (f.operator === 'ilike') pageQuery = pageQuery.ilike(f.column, `%${f.value}%`)
-            }
-          }
-          const { data, error } = await pageQuery.range(offset, offset + pageSize - 1)
-          if (error || !data || data.length === 0) {
-            hasMore = false
-          } else {
-            allResults.push(...data)
-            offset += pageSize
-            hasMore = data.length === pageSize
+        if (queryConfig.filters) {
+          for (const f of queryConfig.filters) {
+            if (f.column === 'raw_data') continue
+            if (f.operator === 'eq') priceQuery = priceQuery.eq(f.column, f.value)
+            else if (f.operator === 'gt') priceQuery = priceQuery.gt(f.column, f.value)
+            else if (f.operator === 'gte') priceQuery = priceQuery.gte(f.column, f.value)
+            else if (f.operator === 'lt') priceQuery = priceQuery.lt(f.column, f.value)
+            else if (f.operator === 'lte') priceQuery = priceQuery.lte(f.column, f.value)
+            else if (f.operator === 'like') priceQuery = priceQuery.like(f.column, `%${f.value}%`)
+            else if (f.operator === 'ilike') priceQuery = priceQuery.ilike(f.column, `%${f.value}%`)
           }
         }
 
+        // Order by price DESC (string) and limit - this captures most high-value orders
+        priceQuery = priceQuery.order(queryConfig.order.column, { ascending: false }).limit(fetchLimit)
+
+        const { data, error } = await priceQuery
+        if (error) return NextResponse.json({ answer: `Chyba: ${error.message}`, results: [] })
+
         // Get unique orders by code, keeping highest price
         const orderMap = new Map<string, any>()
-        for (const row of allResults) {
+        for (const row of (data || [])) {
           const existing = orderMap.get(row.code)
           const rowPrice = parseFloat(row.totalpricewithvat || row.totalpricewithoutvat || '0')
           const existingPrice = existing ? parseFloat(existing.totalpricewithvat || existing.totalpricewithoutvat || '0') : 0
